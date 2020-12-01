@@ -1,0 +1,355 @@
+---
+title: "Assignment4"
+author: "Mingjia Zhu"
+date: "10/12/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r data preparation}
+# data clean --------------------------------------------------------------
+
+load("C:/706 computational Finance/A4/Monthly_Stock_Data1x.Rdata")
+
+my_data = Monthly_Stock_Data1[is.na(Monthly_Stock_Data1$TICKER)==FALSE, ]
+my_data = my_data[is.na(my_data$Book_to_Mkt)== FALSE , ]
+my_data = my_data[is.na(my_data$Price)== FALSE , ]
+my_data = my_data[is.na(my_data$Return)== FALSE , ]
+my_data = my_data[is.na(my_data$month_date)== FALSE , ]
+# omit the rows which missed the ticker name and dates
+
+#turn it into data.frame form
+my_df = data.frame(my_data$month_date,my_data$GVKEY,
+                   my_data$Q_date,my_data$TICKER,my_data$COM_NAME,
+                   my_data$Book_to_Mkt,my_data$Price,my_data$Return)
+
+colnames(my_df) = c("month_date", "GVKEY","Q-Date","TICKER","COM_NAME","Book_to_Mkt","Price","Return")
+#double check "" TICKER problem
+my_df = my_df[my_df$TICKER != "",]
+
+
+# prepare ticker list and dates list --------------------------------------
+
+# generate how many stocks in our df
+TICKER_list = unique(my_df$TICKER)
+
+length(TICKER_list)
+# generate the time range of our df
+dates_list = sort(unique(my_df$month_date))
+dates_list
+
+
+
+
+
+
+# set parameters ----------------------------------------------------------
+rebalance_fre = 6 # frequency to trade in and out of our portfolio
+start_point=1
+num_basket = 5
+quantile_steps = 1/num_basket
+
+quantile_cutoffs = seq(quantile_steps,1-quantile_steps,quantile_steps)
+rebalance_cutoffs = seq(start_point, length(dates_list), rebalance_fre)
+sum(is.na(my_df))
+#verify there is no na data issue
+
+
+
+```
+
+## Function preparation
+```{r}
+# Stock selection base on BTM ratio category ------------------------------
+# date1 refers to the time doing BTM selection
+#cut_start and cut_length controls the range of BTM we are going to select
+Stock_select = function ( date1 , cut_start , cut_length) {
+  a1 = my_df[my_df$month_date == dates_list[date1], ]
+  
+  cut1 = quantile(a1$Book_to_Mkt , cut_start , na.rm = T)
+  cut2 = quantile(a1$Book_to_Mkt, cut_start + cut_length, na.rm = T)
+  
+  Ticker_in_basket = as.matrix(a1$TICKER [a1$Book_to_Mkt >= cut1 & a1$Book_to_Mkt<= cut2 ])
+  
+  return(Ticker_in_basket)
+}
+
+basket2=Stock_select(228,0,0.2)
+basket3 = Stock_select(222,0,0.2)
+
+# Tracking the performance of stock selction in our basket ----------------
+# this function is doing return tracking for the stocks in our selection basket
+return_track = function (basket , date1 , duration){
+  
+  #build a return track matrix
+  return_M = matrix(NA, nrow = length(basket), ncol = duration +1)
+  rownames(return_M) = as.character(basket)
+  colnames(return_M) = as.character(dates_list[date1:(date1+duration)])
+  
+  #generate each month return and write down
+  for (i in date1 : (date1+duration)){
+    a1 = my_df[my_df$month_date == dates_list[i], ]
+    return1 = (a1[a1$TICKER %in% basket, c(4,8)])
+    #write a for loop to give each stock's month return and then write down on the return_M
+    for (z in basket){
+      value = as.numeric(as.character(return1[return1$TICKER == z,2] ))
+      
+      #avoid the length of 0 problem
+      if (length(value)==0){
+        return_M[z,(i+1-date1)] = 0
+      }
+      else{
+        return_M[z,(i+1-date1)] = value
+      }
+    }
+    
+    
+  }
+  
+  return(return_M)
+  
+}
+
+
+# calculate retunr of portfolio -------------------------------------------
+
+#using the return track matrix to generate how value of portfolio change
+#consider at each date the number of available stocks are different
+# we tend to build a portfolio of $10000 and equally invest on each stock at each rebalance day
+
+
+return_portfolio = function (M1,money){
+  value_M = M1
+  value_M[ , 1]=money / nrow(value_M)
+  (value_M[ ,2]+1)*value_M[,1]
+  for (i in (2:(1+6))){
+    value_M[ ,i] = value_M[ ,i-1]*(1+value_M[ ,i])
+  }
+  
+  cat("Initial investment amount is ",money,"dollar \n",
+      "return during this time period if using the equally weighted investment way is ",
+      (-money+sum(value_M[,7])), " dollar \n")
+  # return rate
+  return (sum(value_M[,7])/money)
+  #return (value_M)
+  
+}
+
+#it gives back the 1+percentage change of our portfolio will be after the duration period
+
+
+
+```
+
+```{r}
+# Start the back test -----------------------------------------------------
+
+# reassign the parameters
+rebalance_fre = 6 # frequency to trade in and out of our portfolio
+# we are looking for the 0,0.2 range of BTM (those low BTM ratio stock)
+cut_start1 = 0; cut_length1 = 0.2
+initial_investment_each_stage = 100000;
+
+#for each rebalance day do the stock selection and 
+#then do the performance tracking for the following 6 months in this case
+
+for ( i in rebalance_cutoffs){
+  basket_low = Stock_select(i,cut_start1,cut_length1)
+  
+  stock_performance = return_track(basket_low , i , rebalance_fre)
+  
+  return_portfolio(stock_performance,initial_investment_each_stage)
+}
+
+
+# if we keep use this strategy the next round initial income
+#will be the last round' final result
+
+initial_investment_at_begin = 100000;
+balance = initial_investment_at_begin;
+balance_track = c(balance)
+for ( i in rebalance_cutoffs){
+  basket_low = Stock_select(i,cut_start1,cut_length1)
+  
+  stock_performance = return_track(basket_low , i , rebalance_fre)
+  
+  balance = balance * return_portfolio(stock_performance,balance)
+  
+  balance_track = c(balance_track,balance)
+}
+date_plot = c(rebalance_cutoffs,(tail(rebalance_cutoffs,1)+rebalance_fre))
+plot(dates_list[date_plot], balance_track)
+
+
+# back test for different strategies  -------------------------------------
+
+#rewrite the return_portfolio omit the print for time saving
+return_portfolio2 = function (M1,money){
+  value_M = M1
+  value_M[ , 1]=money / nrow(value_M)
+  (value_M[ ,2]+1)*value_M[,1]
+  for (i in (2:(1+6))){
+    value_M[ ,i] = value_M[ ,i-1]*(1+value_M[ ,i])
+  }
+  
+  #cat("Initial investment amount is ",money,"dollar \n",
+  #"return during this time period if using the equally weighted investment way is ",
+  #(-money+sum(value_M[,7])), " dollar \n")
+  # return rate
+  Portfolio_value = colSums(value_M[,])
+  return (Portfolio_value)
+  
+}
+
+
+strategy_performance=function(rebalance_cutoffs,rebalance_fre,
+                              BTMcut_start,BTMcut_length,initial_investment_at_begin){
+  
+  initial_investment_at_begin = initial_investment_at_begin;
+  balance = initial_investment_at_begin;
+  balance_track = c()
+  for ( i in rebalance_cutoffs){
+    #print(i)
+    
+    basket_low = Stock_select(i,BTMcut_start,BTMcut_length)
+    
+    
+    stock_performance = return_track(basket_low , i , rebalance_fre)
+    
+    new_track = return_portfolio2(stock_performance,balance)
+    
+    balance = new_track[1+6]
+    
+    balance_track = c(balance_track,new_track[1:6])
+  }
+  
+  return(balance_track)
+}
+
+strategy = strategy_performance(rebalance_cutoffs,rebalance_fre,
+                                0.8,quantile_steps,initial_investment_at_begin)
+
+plot(as.matrix(strategy))
+
+```
+
+## back test for 5 strategy for the whole time period
+
+
+```{r}
+#### denerate the value path for different strategies according to BTM
+#### value_path is a matrix
+
+initial_investment_at_begin=100000
+value_paths = matrix(NA,nrow = length(dates_list),ncol = 1/cut_length1)
+#change to last day to the most available dates
+rownames(value_paths) = dates_list
+colnames(value_paths) = as.character(c("0-20%","20%-40%","40%-60%","60%-80%","80%-100%"))
+
+for (i in cbind(0,quantile_cutoffs)){
+  value_paths[ , 5*i+1] = strategy_performance(rebalance_cutoffs,rebalance_fre,
+                                               i,quantile_steps,initial_investment_at_begin)
+  
+}
+
+
+
+m1=value_paths
+matplot(dates_list,m1, type="l",lwd=1, xlab='Years', ylab='balance', col=1:5)
+legend('topleft', inset=.05, legend=colnames(m1), 
+       pch=1, horiz=TRUE, col=1:5)
+
+summary(value_paths)
+
+# return rate analysis ----------------------------------------------------
+dat=value_paths
+return_paths=apply(dat, 2, function(x)diff(x)/x[-length(x)])
+summary(return_paths)
+
+m1=return_paths
+matplot(dates_list[2:length(dates_list)],m1, type='l',lwd=4, xlab='Years', ylab='monthly return rate', col=1:5)
+legend('topleft', inset=.05, legend=colnames(m1), 
+       pch=1, horiz=TRUE, col=1:5)
+
+
+library(psych)
+psych::describe(return_paths)
+
+for (i in (1:5)){
+  cat(colnames(return_paths)[i],"category according to BTM ratio, its annual mean is "
+      ,12*mean(return_paths[ , i])*100,"%\n")
+  cat("its annual sd also known as volatility is",sqrt(12)*sd(return_paths[,i])*100,"%\n")
+}
+
+
+
+# test for whether the BTM ratio is significant ---------------------------
+
+res <- t.test(return_paths[,1], return_paths[,5])
+res[3]
+for (i in (1:5)){
+  for (j in (1:5)){
+    if (i<j){
+      res <- t.test(return_paths[,i], return_paths[,j])
+      p1=res[3]
+      if (p1<0.05){
+        cat("for the category ",i,'and category ',j,"it can distingush with each other by 2 sample t stats \n")
+      } else {
+        cat("the two category",i,'and ',j, 'can not reject the null that the true difference in means is equal to 0 \n')
+        print(p1)
+      }
+      
+    }
+  }
+}
+
+```
+
+## back test for 5 strategy for 2015-2020
+
+```{r}
+
+# test for time period 2015-2020 ------------------------------------------
+return_df=as.data.frame(return_paths)
+#201501 locates at 155
+return_df_15_20=return_df[168:nrow(return_df),]
+
+m1=return_df_15_20
+matplot(dates_list[(168+1):length(dates_list)],m1, type='l',lwd=4, xlab='Years', ylab='monthly return rate', col=1:5)
+legend('topleft', inset=.05, legend=colnames(m1), 
+       pch=1, horiz=TRUE, col=1:5)
+
+for (i in (1:5)){
+  cat(colnames(m1)[i],"category according to BTM ratio, its annual mean is "
+      ,12*mean(m1[ , i])*100,"%\n")
+  cat("its annual sd also known as volatility is",sqrt(12)*sd(m1[,i])*100,"%\n")
+}
+
+
+# test for whether the BTM ratio is significant ---------------------------
+
+res <- t.test(m1[,1], m1[,5])
+res[3]
+for (i in (1:5)){
+  for (j in (1:5)){
+    if (i<j){
+      res <- t.test(m1[,i], m1[,j])
+      p1=res[3]
+      if (p1<0.05){
+        cat("for the category ",i,'and category ',j,"it can distingush with each other by 2 sample t stats \n")
+      } else {
+        cat("the two category",i,'and ',j, 'can not reject the null that the true difference in means is equal to 0 \n')
+        print(p1)
+      }
+      
+    }
+  }
+}
+
+
+```
+
